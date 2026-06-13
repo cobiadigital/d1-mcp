@@ -63,6 +63,30 @@ const TOOLS = [
       required: ['sql'],
     },
   },
+  {
+    name: 'add_media_item',
+    description:
+      'Add a book, TV show, or movie to the media_items table. Automatically looks up a cover image from the iTunes Search API. Creates the table if it does not exist.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: {
+          type: 'string',
+          description: 'Title of the book, TV show, or movie',
+        },
+        media_type: {
+          type: 'string',
+          enum: ['book', 'movie', 'tv'],
+          description: 'Type of media: book, movie, or tv',
+        },
+        notes: {
+          type: 'string',
+          description: 'Optional notes or description',
+        },
+      },
+      required: ['title', 'media_type'],
+    },
+  },
 ];
 
 // Safe identifier check for table names used in PRAGMA (can't be parameterized)
@@ -126,6 +150,57 @@ async function callTool(
       const result = await stmt.run();
       return { meta: result.meta, success: result.success };
     }
+  }
+
+  if (name === 'add_media_item') {
+    const title = args['title'];
+    const mediaType = args['media_type'];
+    const notes = args['notes'] ?? null;
+
+    if (typeof title !== 'string' || !title) {
+      throw new Error('title is required and must be a string');
+    }
+    if (mediaType !== 'book' && mediaType !== 'movie' && mediaType !== 'tv') {
+      throw new Error('media_type must be one of: book, movie, tv');
+    }
+
+    // Look up cover image from iTunes Search API (free, no key required)
+    const entityMap: Record<string, string> = { book: 'ebook', movie: 'movie', tv: 'tvSeries' };
+    let imageUrl: string | null = null;
+    try {
+      const searchUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(title)}&entity=${entityMap[mediaType]}&limit=1`;
+      const resp = await fetch(searchUrl);
+      if (resp.ok) {
+        const data = (await resp.json()) as { results?: Array<{ artworkUrl100?: string }> };
+        const art = data.results?.[0]?.artworkUrl100;
+        if (art) {
+          // Swap in 600x600 variant — same CDN path, just different size token
+          imageUrl = art.replace('100x100bb', '600x600bb');
+        }
+      }
+    } catch {
+      // Image lookup failure is non-fatal; item is still inserted
+    }
+
+    await db
+      .prepare(
+        `CREATE TABLE IF NOT EXISTS media_items (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          media_type TEXT NOT NULL CHECK(media_type IN ('book', 'movie', 'tv')),
+          image_url TEXT,
+          notes TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )`
+      )
+      .run();
+
+    const result = await db
+      .prepare('INSERT INTO media_items (title, media_type, image_url, notes) VALUES (?, ?, ?, ?)')
+      .bind(title, mediaType, imageUrl, typeof notes === 'string' ? notes : null)
+      .run();
+
+    return { id: result.meta.last_row_id, title, media_type: mediaType, image_url: imageUrl, notes };
   }
 
   throw new Error(`Unknown tool: ${name}`);

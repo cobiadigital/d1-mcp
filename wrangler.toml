@@ -5,4 +5,4 @@ compatibility_date = "2025-06-13"
 [[d1_databases]]
 binding = "DB"
 database_name = "d1-mcp-db"
-database_id = "placeholder"
+database_id = "1b58d81c-0321-4759-a79c-2ac2e19114df"

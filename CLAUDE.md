@@ -71,3 +71,10 @@ CREATE TABLE IF NOT EXISTS media_items (
 ### TypeScript Config
 
 Strict mode, ES2022 target, `moduleResolution: "bundler"`, Cloudflare Workers types. No emit — Wrangler handles bundling from source directly.
+
+## Media Item Descriptions
+
+When writing the `description` field for entries in `media_items`:
+
+- **Max 300 characters** — keep it tight
+- **No proper names** — no character names, actor names, director names, or place names; describe what happens, not who does it

@@ -1,0 +1,8 @@
+name = "d1-mcp"
+main = "src/index.ts"
+compatibility_date = "2025-06-13"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "d1-mcp-db"
+database_id = "placeholder"

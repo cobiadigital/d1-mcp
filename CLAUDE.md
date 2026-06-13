@@ -29,10 +29,32 @@ All requests hit the Cloudflare Worker's `fetch` handler → `/mcp` endpoint →
 
 ### MCP Tools Exposed
 
-Three tools defined in the `TOOLS` constant array:
+Four tools defined in the `TOOLS` constant array:
 1. **`list_tables`** — queries `sqlite_master` for all tables
 2. **`describe_table`** — returns schema/column info for a named table
 3. **`execute_sql`** — runs arbitrary SQL with optional `params` array for parameterized queries
+4. **`add_media_item`** — inserts a book, movie, or TV show into `media_items`, auto-fetching a cover image via the iTunes Search API
+
+### `add_media_item` — Image Lookup
+
+Uses the **iTunes Search API** (free, no API key needed) to find cover art:
+- `book` → `entity=ebook`
+- `movie` → `entity=movie`
+- `tv` → `entity=tvSeries`
+
+The API returns `artworkUrl100`; the tool rewrites the size token to `600x600bb` for a higher-resolution image. Image lookup failure is non-fatal — the item is inserted with `image_url = NULL`.
+
+The `media_items` table is created automatically on first use:
+```sql
+CREATE TABLE IF NOT EXISTS media_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  media_type TEXT NOT NULL CHECK(media_type IN ('book', 'movie', 'tv')),
+  image_url TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+)
+```
 
 ### D1 Query Execution (`callTool`)
 

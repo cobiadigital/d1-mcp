@@ -66,18 +66,18 @@ const TOOLS = [
   {
     name: 'add_media_item',
     description:
-      'Add a book, TV show, or movie to the media_items table. Automatically looks up a cover image from the iTunes Search API. Creates the table if it does not exist.',
+      'Add a book, TV show, movie, album, or single to the media_items table. Automatically looks up a cover image from the iTunes Search API. Creates the table if it does not exist.',
     inputSchema: {
       type: 'object',
       properties: {
         title: {
           type: 'string',
-          description: 'Title of the book, TV show, or movie',
+          description: 'Title of the book, TV show, movie, album, or single',
         },
         media_type: {
           type: 'string',
-          enum: ['book', 'movie', 'tv'],
-          description: 'Type of media: book, movie, or tv',
+          enum: ['book', 'movie', 'tv', 'album', 'single'],
+          description: 'Type of media: book, movie, tv, album, or single',
         },
         notes: {
           type: 'string',
@@ -160,12 +160,12 @@ async function callTool(
     if (typeof title !== 'string' || !title) {
       throw new Error('title is required and must be a string');
     }
-    if (mediaType !== 'book' && mediaType !== 'movie' && mediaType !== 'tv') {
-      throw new Error('media_type must be one of: book, movie, tv');
+    if (mediaType !== 'book' && mediaType !== 'movie' && mediaType !== 'tv' && mediaType !== 'album' && mediaType !== 'single') {
+      throw new Error('media_type must be one of: book, movie, tv, album, single');
     }
 
     // Look up cover image from iTunes Search API (free, no key required)
-    const entityMap: Record<string, string> = { book: 'ebook', movie: 'movie', tv: 'tvSeries' };
+    const entityMap: Record<string, string> = { book: 'ebook', movie: 'movie', tv: 'tvSeries', album: 'album', single: 'musicTrack' };
     let imageUrl: string | null = null;
     try {
       const searchUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(title)}&entity=${entityMap[mediaType]}&limit=1`;
@@ -187,7 +187,7 @@ async function callTool(
         `CREATE TABLE IF NOT EXISTS media_items (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           title TEXT NOT NULL,
-          media_type TEXT NOT NULL CHECK(media_type IN ('book', 'movie', 'tv')),
+          media_type TEXT NOT NULL CHECK(media_type IN ('book', 'movie', 'tv', 'album', 'single')),
           image_url TEXT,
           notes TEXT,
           created_at TEXT NOT NULL DEFAULT (datetime('now'))

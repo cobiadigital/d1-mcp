@@ -2,3 +2,7 @@ node_modules/
 .wrangler/
 __pycache__/
 *.pyc
+
+# local recovery artifacts (contain personal data)
+old-ratings.json
+backup-today.sql

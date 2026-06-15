@@ -41,7 +41,10 @@ def mcp(sql, params):
     if res.get("isError"):
         raise RuntimeError(res["content"][0]["text"])
     txt = res["content"][0]["text"]
-    return json.loads(txt)["rows"] if txt.strip().startswith("{") else []
+    # read queries return {"rows":[...]}; writes return a meta blob with no "rows"
+    if txt.strip().startswith("{"):
+        return json.loads(txt).get("rows", [])
+    return []
 
 
 def norm(s):

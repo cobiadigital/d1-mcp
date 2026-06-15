@@ -33,7 +33,7 @@ Four tools defined in the `TOOLS` constant array:
 1. **`list_tables`** — queries `sqlite_master` for all tables
 2. **`describe_table`** — returns schema/column info for a named table
 3. **`execute_sql`** — runs arbitrary SQL with optional `params` array for parameterized queries
-4. **`add_media_item`** — inserts a book, movie, or TV show into `media_items`, auto-fetching a cover image via the iTunes Search API
+4. **`add_media_item`** — inserts into `media_items` using the real schema (`type`, `title`, `author_creator`, `genre`, `release_year`, `description`, `cover_image_url`) and auto-fetches a cover via the iTunes Search API. Fine for quick one-off adds, but the curated [Media Workflow](#media-workflow) (dedup check, per-type image sourcing, description rules) is **not** enforced by the tool — use `execute_sql` for curated adds.
 
 ### `add_media_item` — Image Lookup
 
@@ -44,19 +44,88 @@ Uses the **iTunes Search API** (free, no API key needed) to find cover art:
 - `album` → `entity=album`
 - `single` → `entity=musicTrack`
 
-The API returns `artworkUrl100`; the tool rewrites the size token to `600x600bb` for a higher-resolution image. Image lookup failure is non-fatal — the item is inserted with `image_url = NULL`.
+For music, the artist (`author_creator`) is appended to the search term for better matches. The API returns `artworkUrl100`; the tool rewrites the size token to `600x600bb` for a higher-resolution image. Image lookup failure is non-fatal — the item is still inserted with `cover_image_url = NULL`.
 
-The `media_items` table is created automatically on first use:
+> **Note:** `add_media_item` writes the **real** `media_items` schema
+> (`type` / `author_creator` / `genre` / `release_year` / `description` /
+> `cover_image_url`; see [Database Schema](#database-schema)). It does **not**
+> do the curated [Media Workflow](#media-workflow) — no duplicate check, and
+> iTunes is its only image source (the workflow prefers TMDB for movies/TV
+> and Open Library for books). For curated adds, use `execute_sql` directly.
+
+## Database Schema
+
+This is the **actual** schema in the live D1 (`d1-mcp-db`). Always write to
+these tables/columns — verify with `describe_table` if unsure.
+
+### `media_items` — the catalog (books, movies, TV, music)
+
 ```sql
-CREATE TABLE IF NOT EXISTS media_items (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT NOT NULL,
-  media_type TEXT NOT NULL CHECK(media_type IN ('book', 'movie', 'tv', 'album', 'single')),
-  image_url TEXT,
-  notes TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+CREATE TABLE media_items (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  type            TEXT NOT NULL CHECK(type IN ('book','tv_show','movie','album','single')),
+  title           TEXT NOT NULL,   -- title ONLY (e.g. "Sky Blue Sky"), not "Artist Title"
+  author_creator  TEXT,            -- artist / author / director — the creator
+  genre           TEXT,
+  release_year    INTEGER,
+  description     TEXT,            -- max 300 chars, no proper names (see Key Rules)
+  cover_image_url TEXT,
+  external_id     TEXT,            -- e.g. iTunes/MusicBrainz id
+  metadata        TEXT,            -- optional JSON blob
+  created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 )
 ```
+
+Note: `type` values are `book`, `tv_show`, `movie`, `album`, `single`
+(TV is `tv_show`, **not** `tv`).
+
+Correct insert for an album:
+```sql
+INSERT INTO media_items (type, title, author_creator, genre, release_year, description, cover_image_url)
+VALUES ('album', ?, ?, ?, ?, ?, ?);
+-- params: title, artist, genre, year, description, cover_url
+```
+
+### `ratings` — 1–10 score + optional review (unique per user+item)
+
+```sql
+CREATE TABLE ratings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+  rating   INTEGER NOT NULL CHECK(rating >= 1 AND rating <= 10),
+  review   TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(user_id, media_id)
+)
+```
+
+### `tags` + `media_tags` — many-to-many tagging
+
+```sql
+CREATE TABLE tags ( id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL );
+CREATE TABLE media_tags (
+  media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+  tag_id   INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+  PRIMARY KEY (media_id, tag_id)
+);
+```
+
+### `users`
+
+```sql
+CREATE TABLE users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT UNIQUE NOT NULL,
+  email TEXT UNIQUE,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+Other tables present: `watchlist`, `user_preferences`, `_cf_KV`,
+`sqlite_sequence` (run `list_tables` / `describe_table` to inspect).
 
 ### D1 Query Execution (`callTool`)
 
@@ -78,15 +147,15 @@ Strict mode, ES2022 target, `moduleResolution: "bundler"`, Cloudflare Workers ty
 
 ### Adding a Specific Item
 
-When asked to add a specific book, movie, or TV show:
+When asked to add a specific book, movie, TV show, album, or single:
 
-1. **Check for duplicates** — query the DB (`SELECT title, media_type FROM media_items`) before inserting
-2. **Fetch a cover image**:
+1. **Check for duplicates** — query the DB (`SELECT title, type, author_creator FROM media_items`) before inserting. Match on title + creator, since `title` holds the title only (the artist lives in `author_creator`).
+2. **Fetch a cover image** → goes in `cover_image_url`:
    - Movies/TV: TMDB at `w500` size
    - Books: Open Library by ISBN-L; if the response is a placeholder (43 bytes), find an alternate source
    - Albums/Singles: iTunes Search API (`entity=album` or `entity=musicTrack`); rewrite `100x100bb` → `600x600bb` in the returned `artworkUrl100`
-3. **Write a description** — max 300 chars; no character names, actor names, director names, or place names
-4. **INSERT via `execute_sql`** directly against the MCP endpoint — do NOT use the `add_media_item` tool (wrong schema)
+3. **Write a description** — max 300 chars; no character names, actor names, director names, or place names. Goes in `description`.
+4. **INSERT via `execute_sql`** directly against the MCP endpoint using the real [Database Schema](#database-schema) (`type`, `title`, `author_creator`, `genre`, `release_year`, `description`, `cover_image_url`) — do **NOT** use the `add_media_item` tool (wrong schema).
 
 ### Offering Suggestions
 
@@ -99,7 +168,8 @@ When asked to suggest items:
 
 ### Key Rules
 
-- Descriptions: max 300 chars, no character names, actor names, director names, or place names
-- Cover images: TMDB `w500` for movies/TV; Open Library ISBN-L for books (43 bytes = placeholder, find alternate); iTunes API `artworkUrl100` rewritten to `600x600bb` for albums/singles
-- All DB writes go through `execute_sql` directly — the built-in `add_media_item` tool uses the wrong schema
-- If the `media_items` table already exists with the old CHECK constraint (only `book`, `movie`, `tv`), run a migration before inserting albums or singles: drop and recreate the table, or use `ALTER TABLE` if no data loss is acceptable
+- Title vs. creator: `title` holds the work's title only; the artist/author/director goes in `author_creator`. Do not concatenate them.
+- Descriptions: max 300 chars, no character names, actor names, director names, or place names → `description` column
+- Cover images: TMDB `w500` for movies/TV; Open Library ISBN-L for books (43 bytes = placeholder, find alternate); iTunes API `artworkUrl100` rewritten to `600x600bb` for albums/singles → `cover_image_url` column
+- Curated DB writes go through `execute_sql` directly using the real [Database Schema](#database-schema); the `add_media_item` tool now writes the correct schema too but skips the dedup check and per-type image sourcing
+- The live `media_items` table already supports all five types via `CHECK(type IN ('book','tv_show','movie','album','single'))` — no migration needed (note TV is `tv_show`, not `tv`)

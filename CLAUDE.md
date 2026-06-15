@@ -41,6 +41,8 @@ Uses the **iTunes Search API** (free, no API key needed) to find cover art:
 - `book` → `entity=ebook`
 - `movie` → `entity=movie`
 - `tv` → `entity=tvSeries`
+- `album` → `entity=album`
+- `single` → `entity=musicTrack`
 
 The API returns `artworkUrl100`; the tool rewrites the size token to `600x600bb` for a higher-resolution image. Image lookup failure is non-fatal — the item is inserted with `image_url = NULL`.
 
@@ -49,7 +51,7 @@ The `media_items` table is created automatically on first use:
 CREATE TABLE IF NOT EXISTS media_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL,
-  media_type TEXT NOT NULL CHECK(media_type IN ('book', 'movie', 'tv')),
+  media_type TEXT NOT NULL CHECK(media_type IN ('book', 'movie', 'tv', 'album', 'single')),
   image_url TEXT,
   notes TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -82,6 +84,7 @@ When asked to add a specific book, movie, or TV show:
 2. **Fetch a cover image**:
    - Movies/TV: TMDB at `w500` size
    - Books: Open Library by ISBN-L; if the response is a placeholder (43 bytes), find an alternate source
+   - Albums/Singles: iTunes Search API (`entity=album` or `entity=musicTrack`); rewrite `100x100bb` → `600x600bb` in the returned `artworkUrl100`
 3. **Write a description** — max 300 chars; no character names, actor names, director names, or place names
 4. **INSERT via `execute_sql`** directly against the MCP endpoint — do NOT use the `add_media_item` tool (wrong schema)
 
@@ -97,5 +100,6 @@ When asked to suggest items:
 ### Key Rules
 
 - Descriptions: max 300 chars, no character names, actor names, director names, or place names
-- Cover images: TMDB `w500` for movies/TV; Open Library ISBN-L for books; verify Open Library images are not placeholders (43 bytes = placeholder, find alternate)
+- Cover images: TMDB `w500` for movies/TV; Open Library ISBN-L for books (43 bytes = placeholder, find alternate); iTunes API `artworkUrl100` rewritten to `600x600bb` for albums/singles
 - All DB writes go through `execute_sql` directly — the built-in `add_media_item` tool uses the wrong schema
+- If the `media_items` table already exists with the old CHECK constraint (only `book`, `movie`, `tv`), run a migration before inserting albums or singles: drop and recreate the table, or use `ALTER TABLE` if no data loss is acceptable

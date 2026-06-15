@@ -41,6 +41,8 @@ Uses the **iTunes Search API** (free, no API key needed) to find cover art:
 - `book` → `entity=ebook`
 - `movie` → `entity=movie`
 - `tv` → `entity=tvSeries`
+- `album` → `entity=album`
+- `single` → `entity=musicTrack`
 
 The API returns `artworkUrl100`; the tool rewrites the size token to `600x600bb` for a higher-resolution image. Image lookup failure is non-fatal — the item is inserted with `image_url = NULL`.
 
@@ -49,7 +51,7 @@ The `media_items` table is created automatically on first use:
 CREATE TABLE IF NOT EXISTS media_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL,
-  media_type TEXT NOT NULL CHECK(media_type IN ('book', 'movie', 'tv')),
+  media_type TEXT NOT NULL CHECK(media_type IN ('book', 'movie', 'tv', 'album', 'single')),
   image_url TEXT,
   notes TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -71,3 +73,33 @@ CREATE TABLE IF NOT EXISTS media_items (
 ### TypeScript Config
 
 Strict mode, ES2022 target, `moduleResolution: "bundler"`, Cloudflare Workers types. No emit — Wrangler handles bundling from source directly.
+
+## Media Workflow
+
+### Adding a Specific Item
+
+When asked to add a specific book, movie, or TV show:
+
+1. **Check for duplicates** — query the DB (`SELECT title, media_type FROM media_items`) before inserting
+2. **Fetch a cover image**:
+   - Movies/TV: TMDB at `w500` size
+   - Books: Open Library by ISBN-L; if the response is a placeholder (43 bytes), find an alternate source
+   - Albums/Singles: iTunes Search API (`entity=album` or `entity=musicTrack`); rewrite `100x100bb` → `600x600bb` in the returned `artworkUrl100`
+3. **Write a description** — max 300 chars; no character names, actor names, director names, or place names
+4. **INSERT via `execute_sql`** directly against the MCP endpoint — do NOT use the `add_media_item` tool (wrong schema)
+
+### Offering Suggestions
+
+When asked to suggest items:
+
+1. **Query the full DB** to see everything already in it (avoid repeats)
+2. **Analyze ratings** — high-rated items reveal taste; low-rated items signal what to avoid; weight suggestions accordingly
+3. **Propose 8–10 items** across types with a brief rationale for why each fits the taste profile
+4. **On confirmation**, run the add steps above for the whole batch in parallel where possible
+
+### Key Rules
+
+- Descriptions: max 300 chars, no character names, actor names, director names, or place names
+- Cover images: TMDB `w500` for movies/TV; Open Library ISBN-L for books (43 bytes = placeholder, find alternate); iTunes API `artworkUrl100` rewritten to `600x600bb` for albums/singles
+- All DB writes go through `execute_sql` directly — the built-in `add_media_item` tool uses the wrong schema
+- If the `media_items` table already exists with the old CHECK constraint (only `book`, `movie`, `tv`), run a migration before inserting albums or singles: drop and recreate the table, or use `ALTER TABLE` if no data loss is acceptable

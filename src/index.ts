@@ -72,19 +72,31 @@ const TOOLS = [
       properties: {
         title: {
           type: 'string',
-          description: 'Title of the book, TV show, movie, album, or single',
+          description: 'Title of the work only (e.g. "Sky Blue Sky") — not "Artist - Title"',
         },
-        media_type: {
+        type: {
           type: 'string',
-          enum: ['book', 'movie', 'tv', 'album', 'single'],
-          description: 'Type of media: book, movie, tv, album, or single',
+          enum: ['book', 'movie', 'tv_show', 'album', 'single'],
+          description: 'Type of media: book, movie, tv_show, album, or single',
         },
-        notes: {
+        author_creator: {
           type: 'string',
-          description: 'Optional notes or description',
+          description: 'Artist, author, or director — the creator of the work',
+        },
+        genre: {
+          type: 'string',
+          description: 'Optional genre',
+        },
+        release_year: {
+          type: 'integer',
+          description: 'Optional release year',
+        },
+        description: {
+          type: 'string',
+          description: 'Optional description (max 300 chars; no character/actor/director/place names)',
         },
       },
-      required: ['title', 'media_type'],
+      required: ['title', 'type'],
     },
   },
 ];
@@ -154,53 +166,67 @@ async function callTool(
 
   if (name === 'add_media_item') {
     const title = args['title'];
-    const mediaType = args['media_type'];
-    const notes = args['notes'] ?? null;
+    const type = args['type'];
+    const authorCreator = typeof args['author_creator'] === 'string' ? args['author_creator'] : null;
+    const genre = typeof args['genre'] === 'string' ? args['genre'] : null;
+    const releaseYear = typeof args['release_year'] === 'number' ? args['release_year'] : null;
+    const description = typeof args['description'] === 'string' ? args['description'] : null;
 
     if (typeof title !== 'string' || !title) {
       throw new Error('title is required and must be a string');
     }
-    if (mediaType !== 'book' && mediaType !== 'movie' && mediaType !== 'tv' && mediaType !== 'album' && mediaType !== 'single') {
-      throw new Error('media_type must be one of: book, movie, tv, album, single');
+    if (type !== 'book' && type !== 'movie' && type !== 'tv_show' && type !== 'album' && type !== 'single') {
+      throw new Error('type must be one of: book, movie, tv_show, album, single');
     }
 
-    // Look up cover image from iTunes Search API (free, no key required)
-    const entityMap: Record<string, string> = { book: 'ebook', movie: 'movie', tv: 'tvSeries', album: 'album', single: 'musicTrack' };
-    let imageUrl: string | null = null;
+    // Look up cover image from iTunes Search API (free, no key required).
+    // For music, include the artist in the search term for better matches.
+    const entityMap: Record<string, string> = { book: 'ebook', movie: 'movie', tv_show: 'tvSeries', album: 'album', single: 'musicTrack' };
+    const searchTerm = authorCreator ? `${title} ${authorCreator}` : title;
+    let coverImageUrl: string | null = null;
     try {
-      const searchUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(title)}&entity=${entityMap[mediaType]}&limit=1`;
+      const searchUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(searchTerm)}&entity=${entityMap[type]}&limit=1`;
       const resp = await fetch(searchUrl);
       if (resp.ok) {
         const data = (await resp.json()) as { results?: Array<{ artworkUrl100?: string }> };
         const art = data.results?.[0]?.artworkUrl100;
         if (art) {
           // Swap in 600x600 variant — same CDN path, just different size token
-          imageUrl = art.replace('100x100bb', '600x600bb');
+          coverImageUrl = art.replace('100x100bb', '600x600bb');
         }
       }
     } catch {
       // Image lookup failure is non-fatal; item is still inserted
     }
 
+    // Matches the live D1 schema (see CLAUDE.md → Database Schema).
     await db
       .prepare(
         `CREATE TABLE IF NOT EXISTS media_items (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
+          type TEXT NOT NULL CHECK(type IN ('book', 'tv_show', 'movie', 'album', 'single')),
           title TEXT NOT NULL,
-          media_type TEXT NOT NULL CHECK(media_type IN ('book', 'movie', 'tv', 'album', 'single')),
-          image_url TEXT,
-          notes TEXT,
-          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+          author_creator TEXT,
+          genre TEXT,
+          release_year INTEGER,
+          description TEXT,
+          cover_image_url TEXT,
+          external_id TEXT,
+          metadata TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )`
       )
       .run();
 
     const result = await db
-      .prepare('INSERT INTO media_items (title, media_type, image_url, notes) VALUES (?, ?, ?, ?)')
-      .bind(title, mediaType, imageUrl, typeof notes === 'string' ? notes : null)
+      .prepare(
+        'INSERT INTO media_items (type, title, author_creator, genre, release_year, description, cover_image_url) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      )
+      .bind(type, title, authorCreator, genre, releaseYear, description, coverImageUrl)
       .run();
 
-    return { id: result.meta.last_row_id, title, media_type: mediaType, image_url: imageUrl, notes };
+    return { id: result.meta.last_row_id, type, title, author_creator: authorCreator, genre, release_year: releaseYear, description, cover_image_url: coverImageUrl };
   }
 
   throw new Error(`Unknown tool: ${name}`);

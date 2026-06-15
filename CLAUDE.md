@@ -33,7 +33,7 @@ Four tools defined in the `TOOLS` constant array:
 1. **`list_tables`** — queries `sqlite_master` for all tables
 2. **`describe_table`** — returns schema/column info for a named table
 3. **`execute_sql`** — runs arbitrary SQL with optional `params` array for parameterized queries
-4. **`add_media_item`** — ⚠️ **do not use.** Inserts into a `media_items` shape that does not match the live DB (see [Database Schema](#database-schema)). Use `execute_sql` instead.
+4. **`add_media_item`** — inserts into `media_items` using the real schema (`type`, `title`, `author_creator`, `genre`, `release_year`, `description`, `cover_image_url`) and auto-fetches a cover via the iTunes Search API. Fine for quick one-off adds, but the curated [Media Workflow](#media-workflow) (dedup check, per-type image sourcing, description rules) is **not** enforced by the tool — use `execute_sql` for curated adds.
 
 ### `add_media_item` — Image Lookup
 
@@ -44,21 +44,19 @@ Uses the **iTunes Search API** (free, no API key needed) to find cover art:
 - `album` → `entity=album`
 - `single` → `entity=musicTrack`
 
-The API returns `artworkUrl100`; the tool rewrites the size token to `600x600bb` for a higher-resolution image. Image lookup failure is non-fatal.
+For music, the artist (`author_creator`) is appended to the search term for better matches. The API returns `artworkUrl100`; the tool rewrites the size token to `600x600bb` for a higher-resolution image. Image lookup failure is non-fatal — the item is still inserted with `cover_image_url = NULL`.
 
-> **⚠️ Do NOT use the `add_media_item` tool to add anything.** It writes to a
-> table shape that does **not** match the live database (it uses
-> `media_type` / `image_url` / `notes` and creates its own `CREATE TABLE IF
-> NOT EXISTS media_items` with those columns). The real `media_items` table
-> uses `type` / `cover_image_url` / `description` plus `author_creator`,
-> `genre`, `release_year`, etc. — see [Database Schema](#database-schema)
-> below. All adds must go through `execute_sql` with the real schema.
+> **Note:** `add_media_item` writes the **real** `media_items` schema
+> (`type` / `author_creator` / `genre` / `release_year` / `description` /
+> `cover_image_url`; see [Database Schema](#database-schema)). It does **not**
+> do the curated [Media Workflow](#media-workflow) — no duplicate check, and
+> iTunes is its only image source (the workflow prefers TMDB for movies/TV
+> and Open Library for books). For curated adds, use `execute_sql` directly.
 
 ## Database Schema
 
 This is the **actual** schema in the live D1 (`d1-mcp-db`). Always write to
-these tables/columns — verify with `describe_table` if unsure. The
-`add_media_item` tool's self-created table is wrong; ignore it.
+these tables/columns — verify with `describe_table` if unsure.
 
 ### `media_items` — the catalog (books, movies, TV, music)
 
@@ -173,5 +171,5 @@ When asked to suggest items:
 - Title vs. creator: `title` holds the work's title only; the artist/author/director goes in `author_creator`. Do not concatenate them.
 - Descriptions: max 300 chars, no character names, actor names, director names, or place names → `description` column
 - Cover images: TMDB `w500` for movies/TV; Open Library ISBN-L for books (43 bytes = placeholder, find alternate); iTunes API `artworkUrl100` rewritten to `600x600bb` for albums/singles → `cover_image_url` column
-- All DB writes go through `execute_sql` directly using the real [Database Schema](#database-schema) — the built-in `add_media_item` tool uses the wrong schema and must not be used
+- Curated DB writes go through `execute_sql` directly using the real [Database Schema](#database-schema); the `add_media_item` tool now writes the correct schema too but skips the dedup check and per-type image sourcing
 - The live `media_items` table already supports all five types via `CHECK(type IN ('book','tv_show','movie','album','single'))` — no migration needed (note TV is `tv_show`, not `tv`)

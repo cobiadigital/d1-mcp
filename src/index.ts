@@ -663,8 +663,8 @@ export default {
       return jsonResponse({ status: 'ok' });
     }
 
-    // Only handle /mcp endpoint below
-    if (url.pathname !== '/mcp') {
+    // Accept MCP requests at both /mcp and / (root) so either URL works in Claude
+    if (url.pathname !== '/mcp' && url.pathname !== '/') {
       return jsonResponse({ error: 'Not found' }, 404);
     }
 

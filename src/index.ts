@@ -66,7 +66,7 @@ const TOOLS = [
   {
     name: 'add_media_item',
     description:
-      'Add a book, TV show, movie, album, or single to the media_items table. Automatically looks up a cover image from the iTunes Search API. Creates the table if it does not exist.',
+      'Add a book, TV show, movie, album, single, or podcast to the media_items table. Automatically looks up a cover image from the iTunes Search API. Creates the table if it does not exist.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -76,8 +76,8 @@ const TOOLS = [
         },
         type: {
           type: 'string',
-          enum: ['book', 'movie', 'tv_show', 'album', 'single'],
-          description: 'Type of media: book, movie, tv_show, album, or single',
+          enum: ['book', 'movie', 'tv_show', 'album', 'single', 'podcast'],
+          description: 'Type of media: book, movie, tv_show, album, single, or podcast',
         },
         author_creator: {
           type: 'string',
@@ -94,6 +94,10 @@ const TOOLS = [
         description: {
           type: 'string',
           description: 'Optional description (max 300 chars; no character/actor/director/place names)',
+        },
+        links: {
+          type: 'string',
+          description: 'Optional related links (e.g. streaming, purchase, or feed URLs) — a single URL or JSON array of URLs',
         },
       },
       required: ['title', 'type'],
@@ -171,17 +175,18 @@ async function callTool(
     const genre = typeof args['genre'] === 'string' ? args['genre'] : null;
     const releaseYear = typeof args['release_year'] === 'number' ? args['release_year'] : null;
     const description = typeof args['description'] === 'string' ? args['description'] : null;
+    const links = typeof args['links'] === 'string' ? args['links'] : null;
 
     if (typeof title !== 'string' || !title) {
       throw new Error('title is required and must be a string');
     }
-    if (type !== 'book' && type !== 'movie' && type !== 'tv_show' && type !== 'album' && type !== 'single') {
-      throw new Error('type must be one of: book, movie, tv_show, album, single');
+    if (type !== 'book' && type !== 'movie' && type !== 'tv_show' && type !== 'album' && type !== 'single' && type !== 'podcast') {
+      throw new Error('type must be one of: book, movie, tv_show, album, single, podcast');
     }
 
     // Look up cover image from iTunes Search API (free, no key required).
     // For music, include the artist in the search term for better matches.
-    const entityMap: Record<string, string> = { book: 'ebook', movie: 'movie', tv_show: 'tvSeries', album: 'album', single: 'musicTrack' };
+    const entityMap: Record<string, string> = { book: 'ebook', movie: 'movie', tv_show: 'tvSeries', album: 'album', single: 'musicTrack', podcast: 'podcast' };
     const searchTerm = authorCreator ? `${title} ${authorCreator}` : title;
     let coverImageUrl: string | null = null;
     try {
@@ -204,13 +209,14 @@ async function callTool(
       .prepare(
         `CREATE TABLE IF NOT EXISTS media_items (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
-          type TEXT NOT NULL CHECK(type IN ('book', 'tv_show', 'movie', 'album', 'single')),
+          type TEXT NOT NULL CHECK(type IN ('book', 'tv_show', 'movie', 'album', 'single', 'podcast')),
           title TEXT NOT NULL,
           author_creator TEXT,
           genre TEXT,
           release_year INTEGER,
           description TEXT,
           cover_image_url TEXT,
+          links TEXT,
           external_id TEXT,
           metadata TEXT,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -221,12 +227,12 @@ async function callTool(
 
     const result = await db
       .prepare(
-        'INSERT INTO media_items (type, title, author_creator, genre, release_year, description, cover_image_url) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO media_items (type, title, author_creator, genre, release_year, description, cover_image_url, links) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
       )
-      .bind(type, title, authorCreator, genre, releaseYear, description, coverImageUrl)
+      .bind(type, title, authorCreator, genre, releaseYear, description, coverImageUrl, links)
       .run();
 
-    return { id: result.meta.last_row_id, type, title, author_creator: authorCreator, genre, release_year: releaseYear, description, cover_image_url: coverImageUrl };
+    return { id: result.meta.last_row_id, type, title, author_creator: authorCreator, genre, release_year: releaseYear, description, cover_image_url: coverImageUrl, links };
   }
 
   throw new Error(`Unknown tool: ${name}`);
